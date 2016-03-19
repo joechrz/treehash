@@ -1,0 +1,9 @@
+[package]
+name = "treehash"
+version = "0.1.0"
+authors = ["Joe C <joechrz@gmail.com>"]
+
+[dependencies]
+docopt = "0.6"
+rustc-serialize = "0.3"
+rust-crypto = "^0.2"
