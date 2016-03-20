@@ -10,6 +10,9 @@ use self::crypto::digest::Digest;
 
 const ONE_MB: usize = 1048576;
 
+// TODO: switch to VecDeque; use indexing operations + mutex to parallelize (each thread inserts @
+// a specific position)
+
 /**********************************************************************
  * Some Helper Functions
  **********************************************************************/
@@ -58,10 +61,7 @@ fn load_file(filename: &str) -> LinkedList<Vec<u8>> {
 
   // generate the hashes for each 1mb chunk and store
   loop {
-    let bytes_read = match file.read(&mut buf) {
-      Ok(bytes) => bytes,
-      Err(msg) => panic!(msg)
-    };
+    let bytes_read = file.read(&mut buf).unwrap();
 
     if bytes_read == 0 {
       break;
