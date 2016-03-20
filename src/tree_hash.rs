@@ -3,7 +3,7 @@ extern crate crypto;
 use std::fs::File;
 use std::io::Read;
 use std::error::Error;
-use std::collections::LinkedList;
+use std::collections::VecDeque;
 
 use self::crypto::sha2::Sha256;
 use self::crypto::digest::Digest;
@@ -50,14 +50,14 @@ pub fn to_hex_string(bytes: &Vec<u8>) {
 /**********************************************************************
  * The meat of it
  **********************************************************************/
-fn load_file(filename: &str) -> LinkedList<Vec<u8>> {
+fn load_file(filename: &str) -> VecDeque<Vec<u8>> {
   let mut file = match File::open(filename) {
     Ok(f) => f,
     Err(msg) => panic!(msg)
   };
 
   let mut buf: [u8; ONE_MB] = [0; ONE_MB];
-  let mut hashes: LinkedList<Vec<u8>> = LinkedList::new();
+  let mut hashes: VecDeque<Vec<u8>> = VecDeque::new();
 
   // generate the hashes for each 1mb chunk and store
   loop {
@@ -76,8 +76,8 @@ fn load_file(filename: &str) -> LinkedList<Vec<u8>> {
   hashes
 }
 
-fn reduce_level(hashes: &mut LinkedList<Vec<u8>>) -> LinkedList<Vec<u8>> {
-  let mut combined: LinkedList<Vec<u8>> = LinkedList::new();
+fn reduce_level(hashes: &mut VecDeque<Vec<u8>>) -> VecDeque<Vec<u8>> {
+  let mut combined: VecDeque<Vec<u8>> = VecDeque::new();
 
   loop {
     let combination = match (hashes.pop_front(), hashes.pop_front()) {
