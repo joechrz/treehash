@@ -8,6 +8,22 @@ use std::collections::LinkedList;
 use self::crypto::sha2::Sha256;
 use self::crypto::digest::Digest;
 
+const ONE_MB: usize = 1048576;
+
+/**********************************************************************
+ * Some Helper Functions
+ **********************************************************************/
+fn rollup(lbytes: &Vec<u8>, rbytes: &Vec<u8>) -> Vec<u8> {
+  let mut merge_buf: [u8; 64] = [0; 64];
+
+  for i in 0..32 {
+    merge_buf[i] = lbytes[i];
+    merge_buf[32 + i] = rbytes[i];
+  }
+
+  run_sha256(&merge_buf)
+}
+
 pub fn run_sha256(bytes: &[u8]) -> Vec<u8> {
   let mut digest = Sha256::new();
   let mut outbuf: [u8; 32] = [0; 32];
@@ -28,68 +44,75 @@ pub fn to_hex_string(bytes: &Vec<u8>) {
   println!("{}", bytestring);
 }
 
-fn hash_reduce(hashes: &mut LinkedList<Vec<u8>>) -> Vec<u8> {
-  let mut cur: LinkedList<Vec<u8>> = LinkedList::new();
-  let mut next: LinkedList<Vec<u8>> = LinkedList::new();
-  let mut merge_buf: [u8; 64] = [0; 64];
+/**********************************************************************
+ * The meat of it
+ **********************************************************************/
+fn load_file(filename: &str) -> LinkedList<Vec<u8>> {
+  let mut file = match File::open(filename) {
+    Ok(f) => f,
+    Err(msg) => panic!(msg)
+  };
 
-  // TODO: figure out how to coerce the types to be the same
-  for h in hashes {
-    cur.push_back(h.iter().cloned().collect());
-  }
-
-  loop {
-    let mut merged_pairs = 0;
-
-    loop {
-      match (cur.pop_front(), cur.pop_front()) {
-        (Some(left), Some(right)) => {
-          for i in 0..32 {
-            merge_buf[i] = left[i];
-            merge_buf[32 + i] = right[i];
-          }
-
-          next.push_back(run_sha256(&merge_buf));
-          merged_pairs += 1;
-        },
-
-        (Some(left), None) => next.push_back(left),
-        (None, None) => break,
-        (None, _) => ()
-      }
-    }
-
-    if merged_pairs == 0 {
-      match next.pop_front() {
-        Some(hash) => return hash,
-        None => panic!("No hashes!")
-      };
-    }
-    else {
-      cur = next;
-      next = LinkedList::new();
-    }
-  }
-}
-
-pub fn tree_hash(filename: &str) -> Result<Vec<u8>, Box<Error>> {
-  const ONE_MB: usize = 1048576;
-
-  let mut f = try!(File::open(filename));
   let mut buf: [u8; ONE_MB] = [0; ONE_MB];
-  let mut hashes = LinkedList::<Vec<u8>>::new();
+  let mut hashes: LinkedList<Vec<u8>> = LinkedList::new();
 
+  // generate the hashes for each 1mb chunk and store
   loop {
-    let bytes_read = try!(f.read(&mut buf));
+    let bytes_read = match file.read(&mut buf) {
+      Ok(bytes) => bytes,
+      Err(msg) => panic!(msg)
+    };
+
     if bytes_read == 0 {
       break;
     }
 
-    let sha = run_sha256(&buf[0..bytes_read]);
-    hashes.push_back(sha);
+    // TODO: parallelize the hashing
+    let data_slice = &buf[0..bytes_read];
+    let hash = run_sha256(&data_slice);
+    hashes.push_back(hash);
   }
 
-  let final_hash = hash_reduce(&mut hashes);
+  hashes
+}
 
-  Ok(final_hash)
+fn reduce_level(hashes: &mut LinkedList<Vec<u8>>) -> LinkedList<Vec<u8>> {
+  let mut combined: LinkedList<Vec<u8>> = LinkedList::new();
+
+  loop {
+    let combination = match (hashes.pop_front(), hashes.pop_front()) {
+      (Some(left), Some(right)) => {
+        rollup(&left, &right)
+      },
+      (Some(left), None) => left,
+      (None, _) => break
+    };
+
+    combined.push_back(combination);
+  }
+
+  combined
+}
+
+pub fn tree_hash(filename: &str) -> Result<Vec<u8>, Box<Error>> {
+  let mut hashes = load_file(filename);
+
+  if hashes.is_empty() {
+    return Ok(run_sha256(&[]));
+  }
+
+  // reduce down to a single hash
+  loop {
+    let reduction = reduce_level(&mut hashes);
+    hashes = reduction;
+
+    if hashes.len() < 2 {
+      break;
+    }
+  }
+
+  match hashes.pop_front() {
+    Some(hash) => Ok(hash),
+    None => panic!("Error computing hash")
+  }
 }
