@@ -1,5 +1,6 @@
 extern crate crypto;
 
+use std::io;
 use std::fs::File;
 use std::io::Read;
 use std::error::Error;
@@ -89,14 +90,16 @@ fn collapse_stack(stack: &mut Vec<TreeHashStackFrame>, force: bool) {
 }
 
 pub fn tree_hash(filename: &str) -> Result<Vec<u8>, Box<Error>> {
-    let mut file = try!(File::open(filename));
-    let mut buf: [u8; ONE_MB] = [0; ONE_MB];
-
     // 32 should handle pretty large (several gb) files without reallocating
     let mut stack: Vec<TreeHashStackFrame> = Vec::with_capacity(32);
+    let mut buf: [u8; ONE_MB] = [0; ONE_MB];
+    let mut read_from: Box<io::Read> = match filename {
+        "-" | "" => Box::new(io::stdin()),
+        _ => Box::new(try!(File::open(filename)))
+    };
 
     loop {
-        let bytes_read = file.read(&mut buf).unwrap();
+        let bytes_read = read_from.read(&mut buf).unwrap();
         if bytes_read == 0 {
             break;
         }
