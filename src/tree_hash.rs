@@ -3,7 +3,6 @@ extern crate crypto;
 use std::fs::File;
 use std::io::Read;
 use std::error::Error;
-use std::collections::VecDeque;
 
 use self::crypto::sha2::Sha256;
 use self::crypto::digest::Digest;
@@ -48,71 +47,78 @@ pub fn to_hex_string(bytes: &Vec<u8>) {
 }
 
 /**********************************************************************
- * The meat of it
  **********************************************************************/
-fn load_file(filename: &str) -> VecDeque<Vec<u8>> {
-  let mut file = match File::open(filename) {
-    Ok(f) => f,
-    Err(msg) => panic!(msg)
-  };
+// level # and byte array (the bottom of the tree is level 0 and counts toward the top)
+struct TreeHashStackFrame {
+  level: u64,
+  bytes: Vec<u8>
+}
 
+/* collapse_stack makes sure the you'll need at most [ceil(log2(file_size_in_mb)) + 1]
+ * levels to compute the tree hash of the total file.  
+ *
+ * while the stack has multiple frames, pop 2 frames and attempt to combine them.
+ * if the 2 frames are not combined, stop iterating.
+ *
+ * 2 frames are combined when they're at the same level or the 'force' flag is true
+ */
+fn collapse_stack(stack: &mut Vec<TreeHashStackFrame>, force: bool) {
+  loop {
+    if stack.len() < 2 {
+      return;
+    }
+
+    // short-circuit guarantees at least length 2, so unwrap() is ok
+    let right = stack.pop().unwrap();
+    let left = stack.pop().unwrap();
+
+    if left.level == right.level || force {
+      let rolled_up = rollup(&left.bytes, &right.bytes);
+
+      stack.push(TreeHashStackFrame {
+        level: left.level + 1,
+        bytes: rolled_up
+      });
+    }
+    else {
+      stack.push(left);
+      stack.push(right);
+      return;
+    }
+  }
+}
+
+pub fn tree_hash(filename: &str) -> Result<Vec<u8>, Box<Error>> {
+  let mut file = try!(File::open(filename));
   let mut buf: [u8; ONE_MB] = [0; ONE_MB];
-  let mut hashes: VecDeque<Vec<u8>> = VecDeque::new();
 
-  // generate the hashes for each 1mb chunk and store
+  // 32 should handle pretty large (several gb) files without reallocating
+  let mut stack: Vec<TreeHashStackFrame> = Vec::with_capacity(32);
+
   loop {
     let bytes_read = file.read(&mut buf).unwrap();
-
     if bytes_read == 0 {
       break;
     }
 
-    // TODO: parallelize the hashing
+    // read a <=1MB chunk, compute the sha256, and push onto the stack
     let data_slice = &buf[0..bytes_read];
-    let hash = run_sha256(&data_slice);
-    hashes.push_back(hash);
+
+    stack.push(TreeHashStackFrame {
+      level: 0,
+      bytes: run_sha256(&data_slice)
+    });
+
+    // then optimize the stack (collapse like-levels into a higher level)
+    collapse_stack(&mut stack, false);
   }
 
-  hashes
-}
+  // force-combine the last bits (eg: promote frames that don't have a pair at their own level)
+  collapse_stack(&mut stack, true);
 
-fn reduce_level(hashes: &mut VecDeque<Vec<u8>>) -> VecDeque<Vec<u8>> {
-  let mut combined: VecDeque<Vec<u8>> = VecDeque::new();
-
-  loop {
-    let combination = match (hashes.pop_front(), hashes.pop_front()) {
-      (Some(left), Some(right)) => {
-        rollup(&left, &right)
-      },
-      (Some(left), None) => left,
-      (None, _) => break
-    };
-
-    combined.push_back(combination);
-  }
-
-  combined
-}
-
-pub fn tree_hash(filename: &str) -> Result<Vec<u8>, Box<Error>> {
-  let mut hashes = load_file(filename);
-
-  if hashes.is_empty() {
-    return Ok(run_sha256(&[]));
-  }
-
-  // reduce down to a single hash
-  loop {
-    let reduction = reduce_level(&mut hashes);
-    hashes = reduction;
-
-    if hashes.len() < 2 {
-      break;
-    }
-  }
-
-  match hashes.pop_front() {
-    Some(hash) => Ok(hash),
-    None => panic!("Error computing hash")
+  // the last frame contains the entire file's hash
+  match stack.pop() {
+    Some(final_frame) => Ok(final_frame.bytes),
+    None => panic!("Something went horribly wrong")
   }
 }
