@@ -8,25 +8,19 @@ use std::error::Error;
 use self::crypto::sha2::Sha256;
 use self::crypto::digest::Digest;
 
+/****************************************************************
+ * Constants and Types
+ ****************************************************************/
 const ONE_MB: usize = 1048576;
 
-// TODO: switch to VecDeque; use indexing operations + mutex to parallelize (each thread inserts @
-// a specific position)
-
-/**********************************************************************
- * Some Helper Functions
- **********************************************************************/
-fn rollup(lbytes: &Vec<u8>, rbytes: &Vec<u8>) -> Vec<u8> {
-    let mut merge_buf: [u8; 64] = [0; 64];
-
-    for i in 0..32 {
-        merge_buf[i] = lbytes[i];
-        merge_buf[32 + i] = rbytes[i];
-    }
-
-    run_sha256(&merge_buf)
+struct TreeHashStackFrame {
+    level: u64,
+    bytes: Vec<u8>
 }
 
+/****************************************************************
+ * Helper functions
+ ****************************************************************/
 pub fn run_sha256(bytes: &[u8]) -> Vec<u8> {
     let mut digest = Sha256::new();
     let mut outbuf: [u8; 32] = [0; 32];
@@ -47,19 +41,27 @@ pub fn to_hex_string(bytes: &Vec<u8>) {
     println!("{}", bytestring);
 }
 
-/**********************************************************************
- **********************************************************************/
-// level # and byte array (the bottom of the tree is level 0 and counts toward the top)
-struct TreeHashStackFrame {
-    level: u64,
-    bytes: Vec<u8>
+/****************************************************************
+ * Main Implementation
+ ****************************************************************/
+fn rollup(lbytes: &Vec<u8>, rbytes: &Vec<u8>) -> Vec<u8> {
+    let mut merge_buf: [u8; 64] = [0; 64];
+
+    for i in 0..32 {
+        merge_buf[i] = lbytes[i];
+        merge_buf[32 + i] = rbytes[i];
+    }
+
+    run_sha256(&merge_buf)
 }
 
-/* collapse_stack makes sure the you'll need at most [ceil(log2(file_size_in_mb)) + 1]
- * levels to compute the tree hash of the total file.  
+/* collapse_stack makes sure the you'll need at most [ceil(log2(file_size_in_mb)) + 1] stack frames
+ * (1 per level + a buffer frame) to compute the tree hash of the total file.  
  *
- * while the stack has multiple frames, pop 2 frames and attempt to combine them.
- * if the 2 frames are not combined, stop iterating.
+ * while (stack has multiple frames)
+ *   pop 2 frames and attempt to combine them.
+ *   if (2 frames are not combined)
+ *     stop iterating.
  *
  * 2 frames are combined when they're at the same level or the 'force' flag is true
  */
@@ -104,7 +106,7 @@ pub fn tree_hash(filename: &str) -> Result<Vec<u8>, Box<Error>> {
             break;
         }
 
-        // read a <=1MB chunk, compute the sha256, and push onto the stack
+        // read a <= 1MB chunk, compute the sha256, and push onto the stack
         let data_slice = &buf[0..bytes_read];
 
         stack.push(TreeHashStackFrame {
